@@ -1,0 +1,13 @@
+#!/bin/bash
+#completely destroy an OSD
+#change range to suit
+for i in {128..139}
+do
+#export i=137
+  systemctl kill ceph-osd@${i}.service #otherwise will pop back up
+  ceph osd out ${i}
+  ceph osd down ${i}
+  ceph osd destroy ${i} --yes-i-really-mean-it
+  ceph osd crush remove osd.${i}
+  ceph osd rm ${i}
+done
