@@ -1,0 +1,26 @@
+!#/bin/bash
+#rebuild a ceph-mon store.db from OSDs
+ms=/root/mon-store
+db=/root/db
+db_slow=/root/db.slow
+mkdir $ms
+hosts="host1 host2 host3"
+
+# collect the cluster map from stopped OSDs
+for host in $hosts; do
+  ssh root@$host mkdir -p $ms
+  ssh root@$host mkdir -p $db
+  ssh root@$host mkdir -p $db_slow
+  rsync -avz $ms/. root@$host:$ms
+  rsync -avz $db/. root@$host:$db
+  rsync -avz $db_slow/. root@$host:$db_slow
+  rm -rf $ms
+  ssh root@$host <<EOF
+    for osd in /var/lib/ceph/osd/ceph-*; do
+      ceph-objectstore-tool --data-path \$osd --no-mon-config --op update-mon-db --mon-store-path $ms
+    done
+EOF
+  rsync -avz root@$host:$ms/. $ms
+  rsync -avz root@$host:$db/. $db
+  rsync -avz root@$host:$db_slow/. $db_slow
+done
