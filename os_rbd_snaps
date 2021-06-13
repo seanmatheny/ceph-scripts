@@ -1,0 +1,75 @@
+#!/bin/bash
+#script to take backend ceph rbd snapshots of all instances and volumes in
+#a project. Takes nightly and weekly snapshots, retaining one week. 
+source /root/env/bin/activate
+source /root/backup/rcadmin
+DOW=$(/bin/date +%u)
+EMAIL='email@email.com'
+NOVA='/root/env/bin/nova'
+OPENSTACK='/root/env/bin/openstack'
+PROJECT=$1
+#get project id and try to add image to project
+PROJECT_ID=$($OPENSTACK project show $PROJECT --format value -c id)
+##Let's start
+for INSTANCE in $($NOVA list --all-tenants --tenant $PROJECT_ID --fields id,instance_name | /bin/grep "instance-" | /usr/bin/cut -d " " -f 2)
+do
+  #pause instance
+  echo "16 running"
+  $NOVA pause $INSTANCE
+  #for snapshot test if needed: rbd snap ls ephemeral-vms/2d47dd33-deb8-42e6-b258-3462099a9993_disk | tail -n 1 | cut -d " " -f 5
+  #remove old snap for this SUFFIX, but first rename last week's snap until after today's snap succeeds
+  if [ $DOW -eq 6 ]
+  then
+    echo "It's Saturday, time to party and take a weekly backup!" $LOG
+    SUFFIX='Weekly'
+  else
+    echo "It's not Saturday, take a nightly backup" $LOG
+    SUFFIX='Nightly'
+  fi
+  ##dow down
+  rbd snap rename ephemeral-vms/${INSTANCE}_disk@${SUFFIX} ephemeral-vms/${INSTANCE}_disk@${SUFFIX}_BAK 2>/dev/null
+  if [ $? -eq 0 ]
+  then
+    echo "+There was a previous $SUFFIX snap, and it has been renamed"
+  fi
+  echo "+Taking $SUFFIX instance snap for $INSTANCE"
+  rbd snap create ephemeral-vms/${INSTANCE}_disk@${SUFFIX}
+  if [ $? -eq 0 ]
+  then
+    echo "+Snapshot created successfully, removing backup"
+    rbd snap remove ephemeral-vms/${INSTANCE}_disk@${SUFFIX}_BAK
+  rbd snap ls ephemeral-vms/${INSTANCE}_disk
+  else
+    ERRORS=1
+  fi
+  #see if instance has volumes attached
+  for VOLUME in $($OPENSTACK server show $INSTANCE -f value -c volumes_attached)
+  do
+    echo $VOLUME
+    VOLUME="volume-${VOLUME:4:-1}"
+    echo $VOLUME
+    echo "++Instance ${INSTANCE} has volumes, taking $SUFFIX volume snap for ${VOLUME}"
+    echo "++-Renaming if there is already a snap from last week, ignore errors otherwise"
+    rbd snap rename cinder-volumes/${VOLUME}@${SUFFIX} cinder-volumes/${VOLUME}@${SUFFIX}_BAK
+    if [ $? -eq 0 ]
+    then
+      echo "There is a $SUFFIX snap for today, placeholder in case you want to do stuff here"
+    fi
+    echo "rbd snap create cinder-volumes/${VOLUME}@${SUFFIX}"
+    rbd snap create cinder-volumes/${VOLUME}@${SUFFIX}
+    if [ $? -eq 0 ]
+    then
+      echo "Volume Snapshot created successfully, removing backup"
+      rbd snap remove cinder-volumes/${VOLUME}@${SUFFIX}_BAK
+      rbd snap ls cinder-volumes/${VOLUME}@${SUFFIX}_BAK
+else
+      ERRORS=1
+    fi
+  done
+  $NOVA unpause $INSTANCE
+done
+
+if [[ $ERRORS -eq 1 ]]
+then
+  echo "Backup job on cad01 for project $PROJECT had errors-- better check it." | /usr/bin/mail -s "Backup job on cad01 for project $PROJECT had errors." $EMAIL
+fi
